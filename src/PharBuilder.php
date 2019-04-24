@@ -10,8 +10,6 @@ use Phar;
 
 class PharBuilder
 {
-    use HasOptions;
-
     protected $phar;
 
     protected $basePath;
