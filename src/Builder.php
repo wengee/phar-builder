@@ -1,14 +1,15 @@
-<?php
+<?php declare(strict_types=1);
 /**
  * @author   Fung Wing Kit <wengee@gmail.com>
- * @version  2019-04-16 14:53:08 +0800
+ * @version  2019-10-23 10:36:25 +0800
  */
+
 namespace fwkit\PharBuilder;
 
 use ArrayIterator;
 use Phar;
 
-class PharBuilder
+class Builder
 {
     protected $phar;
 
@@ -19,51 +20,92 @@ class PharBuilder
     public function __construct(string $basePath, array $extraOptions = [])
     {
         $this->basePath = $basePath;
-        $options = $this->loadJsonOptions();
-        $options += $this->getDefaultOptions();
-        $options = array_merge($options, $extraOptions);
-        $this->hydrate($options);
+        $this->options = (new Options([
+            'dist'          => $this->joinPaths($basePath, 'dist'),
+            'main'          => 'index.php',
+            'output'        => 'app.phar',
+            'directories'   => [],
+            'files'         => [],
+            'rules'         => [],
+            'exclude'       => [],
+            'stub'          => null,
+            'copy'          => [],
+            'compress'      => 'none',
+            'extensions'    => [],
+        ]))->update($extraOptions);
     }
 
     public static function build(string $basePath, array $extraOptions = [])
     {
-        return (new self($basePath, $extraOptions))->run();
+        return (new static($basePath, $extraOptions))->run();
     }
 
     public function run()
     {
-        if (empty($this->options['directories']) || empty($this->options['files'])) {
+        if (!$this->options['directories'] || !$this->options['files']) {
             return false;
+        }
+
+        if (!file_exists($this->options['dist'])) {
+            mkdir($this->options['dist'], 0755);
         }
 
         if ($this->options['clear']) {
             Utils::clearDir($this->options['dist']);
         }
 
-        $this->copyFiles();
         $s = microtime(true);
-        $pharFile = $this->joinPaths($this->options['dist'], $this->options['output']);
-        if (file_exists($pharFile)) {
-            @unlink($pharFile);
+        if ($this->options['copy']) {
+            $this->copyFiles($this->options['copy']);
         }
 
-        $this->phar = new Phar($pharFile, 0, $this->options['output']);
-        $this->phar->startBuffering();
+        $files = $this->addFiles();
+        if ($this->options['output']) {
+            $this->makePhar($files);
+        } else {
+            $this->makeCopy($files);
+        }
 
-        $this->compressFiles();
-        $total = $this->addFiles();
-        $this->setStub();
-
-        $this->phar->stopBuffering();
         $elapsed = sprintf('%.3f', microtime(true) - $s);
-        $filesize = Utils::humanFilesize(filesize($pharFile));
-        chmod($pharFile, 0755);
-        echo "Finished {$pharFile}, Size: {$filesize}, Total files: {$total}, Elapsed time: {$elapsed}s\n";
+        echo "Elapsed time: {$elapsed}s" . PHP_EOL;
     }
 
-    protected function addFiles()
+    protected function makeCopy(ArrayIterator $files): void
     {
-        $files = [];
+        foreach ($files as $key => $source) {
+            $dest = $this->joinPaths($this->options['dist'], $key);
+            Utils::xcopy($source, $dest);
+        }
+
+        $filesTotal = $files->count();
+        echo "Copy finished, Total files: {$filesTotal}, ";
+    }
+
+    protected function makePhar(ArrayIterator $files): void
+    {
+        $pharFile = $this->joinPaths($this->options['dist'], $this->options['output']);
+        if (file_exists($pharFile)) {
+            Phar::unlinkArchive($pharFile);
+        }
+
+        $phar = new Phar($pharFile, 0, $this->options['output']);
+        $phar->startBuffering();
+        $phar->buildFromIterator($files);
+
+        $this->setStub($phar);
+        $this->compressFiles($phar);
+        $phar->stopBuffering();
+
+        file_put_contents($pharFile . '.md5sum', md5_file($pharFile));
+        $filesize = Utils::humanFilesize(filesize($pharFile));
+        $filesTotal = $files->count();
+        chmod($pharFile, 0755);
+        echo "Finished {$pharFile}, Size: {$filesize}, Total files: {$filesTotal}, ";
+    }
+
+    protected function addFiles(?ArrayIterator $files = null): ArrayIterator
+    {
+        $files = $files ?: new ArrayIterator;
         foreach ($this->options['directories'] as $dir) {
             $this->addFile($dir, $files);
         }
@@ -72,12 +114,10 @@ class PharBuilder
             $this->addFile($file, $files);
         }
 
-        $files = new ArrayIterator($files);
-        $this->phar->buildFromIterator($files);
-        return $files->count();
+        return $files;
     }
 
-    protected function addFile(string $path, array &$files = [])
+    protected function addFile(string $path, ArrayIterator $files)
     {
         if (!$this->checkPath($path)) {
             return false;
@@ -85,7 +125,11 @@ class PharBuilder
 
         $realpath = $this->joinPaths($this->basePath, $path);
         if (is_file($realpath)) {
-            $files[$path] = $realpath;
+            $pos = strrpos($realpath, '.');
+            $ext = ($pos === false) ? false : substr($realpath, $pos + 1);
+            if ($ext === 'php' || in_array($ext, $this->options['extensions'])) {
+                $files[$path] = $realpath;
+            }
         } elseif (is_dir($realpath)) {
             if ($dh = opendir($realpath)) {
                 while (($file = readdir($dh)) !== false) {
@@ -102,17 +146,17 @@ class PharBuilder
         }
     }
 
-    protected function compressFiles()
+    protected function compressFiles(Phar $phar): void
     {
         switch ($this->options['compress']) {
             case 'gz':
             case 'gzip':
-                $this->phar->compressFiles(Phar::GZ);
+                $phar->compressFiles(Phar::GZ);
                 break;
 
             case 'bz2':
             case 'bzip2':
-                $this->phar->compressFiles(Phar::BZ2);
+                $phar->compressFiles(Phar::BZ2);
                 break;
 
             default:
@@ -120,22 +164,25 @@ class PharBuilder
         }
     }
 
-    protected function setStub()
+    protected function setStub(Phar $phar): void
     {
-        if (is_string($this->options['main'])) {
-            $stub = $this->phar->createDefaultStub($this->options['main']);
-        } elseif (is_array($this->options['main'])) {
-            $args = array_values($this->options['main']);
-            $stub = $this->phar->createDefaultStub(...$args);
+        $stubFile = $this->options['stub'];
+        if ($stubFile) {
+            $stubFile = $this->joinPaths($this->basePath, $stubFile);
+            $stub = file_get_contents($stubFile);
         } else {
-            $stub = $this->phar->createDefaultStub('index.php');
+            $stub = <<<EOD
+                #!/usr/bin/env php
+                <?php
+
+                Phar::mapPhar();
+                include 'phar://' . __FILE__ . '/{$this->options['main']}';
+
+                __HALT_COMPILER();
+                EOD;
         }
 
-        if ($this->options['shebang']) {
-            $stub = "#!/usr/bin/env php\n" . $stub;
-        }
-
-        $this->phar->setStub($stub);
+        $phar->setStub($stub);
     }
 
     protected function checkPath(string $path)
@@ -179,36 +226,6 @@ class PharBuilder
         return false;
     }
 
-    protected function loadJsonOptions(): array
-    {
-        $jsonFile = $this->joinPaths($this->basePath, 'build.json');
-        if (is_file($jsonFile)) {
-            $options = @\json_decode(\file_get_contents($jsonFile), true);
-            if ($options && is_array($options)) {
-                return $options;
-            }
-        }
-
-        return [];
-    }
-
-    protected function getDefaultOptions(): array
-    {
-        return [
-            'dist'          => $this->joinPaths($this->basePath, 'dist'),
-            'main'          => 'index.php',
-            'output'        => 'app.phar',
-            'directories'   => [],
-            'files'         => [],
-            'rules'         => [],
-            'exclude'       => [],
-            'shebang'       => true,
-            'clear'         => false,
-            'copy'          => [],
-            'compress'      => 'none',
-        ];
-    }
-
     protected function joinPaths(...$args): string
     {
         $firstArg = '';
@@ -224,13 +241,9 @@ class PharBuilder
         return $firstArg . implode(DIRECTORY_SEPARATOR, $paths);
     }
 
-    protected function copyFiles()
+    protected function copyFiles($files): void
     {
-        if (empty($this->options['copy'])) {
-            return;
-        }
-
-        $files = (array) $this->options['copy'];
+        $files = (array) $files;
         foreach ($files as $key => $value) {
             $dest = $this->joinPaths($this->options['dist'], $value);
             if (is_int($key)) {
@@ -243,25 +256,12 @@ class PharBuilder
         }
     }
 
-    protected function setDist(string $value)
+    protected function setDist(string $value): void
     {
         if (!is_dir($value)) {
             mkdir($value, 0755);
         }
 
         $this->options['dist'] = $value;
-    }
-
-    protected function hydrate($data = []): void
-    {
-        foreach ($data as $key => $value) {
-            $key = str_replace('.', ' ', $key);
-            $method = 'set' . ucwords($key);
-            if (method_exists($this, $method)) {
-                call_user_func([$this, $method], $value);
-            } elseif (property_exists($this, 'options')) {
-                $this->options[$key] = $value;
-            }
-        }
     }
 }
