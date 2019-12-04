@@ -1,7 +1,7 @@
 <?php declare(strict_types=1);
 /**
  * @author   Fung Wing Kit <wengee@gmail.com>
- * @version  2019-10-23 10:36:25 +0800
+ * @version  2019-12-04 10:56:00 +0800
  */
 
 namespace fwkit\PharBuilder;
@@ -55,17 +55,16 @@ class Builder
         }
 
         $s = microtime(true);
-        if ($this->options['copy']) {
-            $this->copyFiles($this->options['copy']);
-        }
-
         $files = $this->addFiles();
         if ($this->options['output']) {
             $this->makePhar($files);
         } else {
             $this->makeCopy($files);
         }
-
+        
+        if ($this->options['copy']) {
+            $this->copyFiles($this->options['copy']);
+        }
         $elapsed = sprintf('%.3f', microtime(true) - $s);
         echo "Elapsed time: {$elapsed}s" . PHP_EOL;
     }
