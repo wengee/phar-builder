@@ -1,7 +1,7 @@
 <?php declare(strict_types=1);
 /**
  * @author   Fung Wing Kit <wengee@gmail.com>
- * @version  2019-12-04 10:56:00 +0800
+ * @version  2019-12-10 17:02:15 +0800
  */
 
 namespace fwkit\PharBuilder;
@@ -42,7 +42,7 @@ class Builder
 
     public function run()
     {
-        if (!$this->options['directories'] || !$this->options['files']) {
+        if (!$this->options['directories'] && !$this->options['files']) {
             return false;
         }
 
