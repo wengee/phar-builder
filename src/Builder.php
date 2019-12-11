@@ -1,7 +1,7 @@
 <?php declare(strict_types=1);
 /**
  * @author   Fung Wing Kit <wengee@gmail.com>
- * @version  2019-12-10 17:02:15 +0800
+ * @version  2019-12-11 10:12:04 +0800
  */
 
 namespace fwkit\PharBuilder;
@@ -17,27 +17,32 @@ class Builder
 
     protected $options;
 
-    public function __construct(string $basePath, array $extraOptions = [])
+    public function __construct(string $basePath, array $options = [])
     {
         $this->basePath = $basePath;
-        $this->options = (new Options([
+        $this->options = $options + [
             'dist'          => $this->joinPaths($basePath, 'dist'),
             'main'          => 'index.php',
             'output'        => 'app.phar',
             'directories'   => [],
             'files'         => [],
             'rules'         => [],
-            'exclude'       => [],
+            'ignore'        => [],
             'stub'          => null,
             'copy'          => [],
             'compress'      => 'none',
             'extensions'    => [],
-        ]))->update($extraOptions);
+            'clear'         => false,
+        ];
+
+        if (isset($this->options['exclude'])) {
+            $this->options['ignore'] = $this->options['exclude'];
+        }
     }
 
-    public static function build(string $basePath, array $extraOptions = [])
+    public static function build(string $basePath, array $options = [])
     {
-        return (new static($basePath, $extraOptions))->run();
+        return (new static($basePath, $options))->run();
     }
 
     public function run()
@@ -118,6 +123,7 @@ class Builder
 
     protected function addFile(string $path, ArrayIterator $files)
     {
+        $path = ltrim($path, '\\/');
         if (!$this->checkPath($path)) {
             return false;
         }
@@ -186,7 +192,7 @@ class Builder
 
     protected function checkPath(string $path)
     {
-        if ($this->checkExclude($path)) {
+        if ($this->checkIgnore($path)) {
             return false;
         }
 
@@ -209,15 +215,15 @@ class Builder
         return false;
     }
 
-    protected function checkExclude(string $path)
+    protected function checkIgnore(string $path)
     {
-        if (empty($this->options['exclude'])) {
+        if (empty($this->options['ignore'])) {
             return false;
         }
 
-        $rules = (array) $this->options['exclude'];
+        $rules = (array) $this->options['ignore'];
         foreach ($rules as $rule) {
-            if (preg_match('#' . $rule . '#i', $path)) {
+            if (preg_match('#^' . $rule . '#i', $path)) {
                 return true;
             }
         }
