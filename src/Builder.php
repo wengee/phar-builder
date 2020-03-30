@@ -1,7 +1,7 @@
 <?php declare(strict_types=1);
 /**
  * @author   Fung Wing Kit <wengee@gmail.com>
- * @version  2019-12-11 10:12:04 +0800
+ * @version  2020-03-30 11:42:07 +0800
  */
 
 namespace fwkit\PharBuilder;
@@ -132,7 +132,7 @@ class Builder
         if (is_file($realpath)) {
             $pos = strrpos($realpath, '.');
             $ext = ($pos === false) ? false : substr($realpath, $pos + 1);
-            if ($ext === 'php' || in_array($ext, $this->options['extensions'])) {
+            if ($ext === 'php' || $ext === 'stub' || in_array($ext, $this->options['extensions'])) {
                 $files[$path] = $realpath;
             }
         } elseif (is_dir($realpath)) {
